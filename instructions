@@ -1,0 +1,6 @@
+game design: a spaceship with a random color between four colors four blocks with each one having a different main color between the ships four random colors
+in the upper left corner there will be a score and in the upper right corner ther will be three hearts representing the ships lives
+how the game works: the ship will move up and down via the player either pressing w for up and s for down while the four blocks will move towards the ship gaining 
+speed and if the ship doesnt match its row with the block with the same color it losses a live if it losses all three lives the main frame gets disposed and sends 
+you to a new screen with you lose written in red and a button that restarts the game if it succeds the score increases the four blocks will return to theyre 
+location in a new random order and the ship will get a new random color
