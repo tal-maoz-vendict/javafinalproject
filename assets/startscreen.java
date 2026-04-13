@@ -3,8 +3,6 @@ import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.awt.event.KeyEvent;
-import java.awt.event.KeyListener;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -126,7 +124,7 @@ public class startscreen extends JFrame {
         }
     }
 
-    private static class GamePanel extends JPanel implements ActionListener, KeyListener {
+    private static class GamePanel extends JPanel implements ActionListener {
         private static final int PANEL_WIDTH = 900;
         private static final int PANEL_HEIGHT = 500;
         private static final int HUD_HEIGHT = 70;
@@ -134,8 +132,9 @@ public class startscreen extends JFrame {
         private static final int SHIP_X = 110;
         private static final int ENTITY_SIZE = 84;
         private static final int BLOCK_START_X = PANEL_WIDTH - 170;
-        private static final double BASE_SPEED = 4.0;
-        private static final double SPEED_STEP = 0.35;
+        private static final double BASE_SPEED = 0.65;
+        private static final double SPEED_STEP = 0.04;
+        private static final int ENCOUNTER_COOLDOWN_TICKS = 24;
 
         private final IntConsumer onGameOver;
         private final Random random = new Random();
@@ -148,6 +147,7 @@ public class startscreen extends JFrame {
 
         private double blockX = BLOCK_START_X;
         private double blockSpeed = BASE_SPEED;
+        private int encounterCooldownTicks = 0;
         private int shipLane = 1;
         private int score = 0;
         private int lives = 3;
@@ -157,20 +157,12 @@ public class startscreen extends JFrame {
             this.onGameOver = onGameOver;
             setPreferredSize(new Dimension(PANEL_WIDTH, PANEL_HEIGHT));
             setBackground(new Color(12, 12, 12));
-            setFocusable(true);
-            addKeyListener(this);
             initializeFallbackColors();
             loadAssets();
+            bindControls();
             resetEncounter(true);
             timer = new Timer(16, this);
             timer.start();
-            SwingUtilities.invokeLater(this::requestFocusInWindow);
-        }
-
-        @Override
-        public void addNotify() {
-            super.addNotify();
-            requestFocusInWindow();
         }
 
         private void initializeFallbackColors() {
@@ -216,6 +208,33 @@ public class startscreen extends JFrame {
             }
         }
 
+        private void bindControls() {
+            bindKey("moveUpW", KeyStroke.getKeyStroke('w'), this::moveUp);
+            bindKey("moveDownS", KeyStroke.getKeyStroke('s'), this::moveDown);
+            bindKey("moveUpArrow", KeyStroke.getKeyStroke("UP"), this::moveUp);
+            bindKey("moveDownArrow", KeyStroke.getKeyStroke("DOWN"), this::moveDown);
+        }
+
+        private void bindKey(String actionName, KeyStroke keyStroke, Runnable action) {
+            getInputMap(WHEN_IN_FOCUSED_WINDOW).put(keyStroke, actionName);
+            getActionMap().put(actionName, new AbstractAction() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    action.run();
+                }
+            });
+        }
+
+        private void moveUp() {
+            shipLane = Math.max(0, shipLane - 1);
+            repaint();
+        }
+
+        private void moveDown() {
+            shipLane = Math.min(LANE_COUNT - 1, shipLane + 1);
+            repaint();
+        }
+
         private int laneTop(int lane) {
             int laneHeight = (PANEL_HEIGHT - HUD_HEIGHT) / LANE_COUNT;
             return HUD_HEIGHT + lane * laneHeight + (laneHeight - ENTITY_SIZE) / 2;
@@ -234,11 +253,9 @@ public class startscreen extends JFrame {
             g2.setFont(new Font("Arial", Font.BOLD, 28));
             g2.drawString("Score: " + score, 18, 45);
 
-            g2.setFont(new Font("SansSerif", Font.BOLD, 30));
-            int heartX = PANEL_WIDTH - 135;
+            int heartX = PANEL_WIDTH - 136;
             for (int i = 0; i < 3; i++) {
-                g2.setColor(i < lives ? Color.RED : new Color(90, 90, 90));
-                g2.drawString("\u2665", heartX + i * 38, 44);
+                drawHeart(g2, heartX + i * 42, 18, 28, i < lives);
             }
 
             int laneHeight = (PANEL_HEIGHT - HUD_HEIGHT) / LANE_COUNT;
@@ -259,6 +276,27 @@ public class startscreen extends JFrame {
             g2.dispose();
         }
 
+        private void drawHeart(Graphics2D g2, int x, int y, int size, boolean active) {
+            Color fillColor = active ? new Color(236, 67, 67) : new Color(65, 65, 65);
+            int lobeSize = size / 2;
+            int centerYOffset = size / 6;
+
+            g2.setColor(fillColor);
+            g2.fillOval(x, y, lobeSize, lobeSize);
+            g2.fillOval(x + lobeSize, y, lobeSize, lobeSize);
+
+            Polygon tip = new Polygon();
+            tip.addPoint(x - 1, y + centerYOffset);
+            tip.addPoint(x + size + 1, y + centerYOffset);
+            tip.addPoint(x + size / 2, y + size);
+            g2.fillPolygon(tip);
+
+            g2.setColor(new Color(20, 20, 20));
+            g2.drawOval(x, y, lobeSize, lobeSize);
+            g2.drawOval(x + lobeSize, y, lobeSize, lobeSize);
+            g2.drawPolygon(tip);
+        }
+
         private void drawEntity(Graphics2D g2, Image image, String colorName, int x, int y, boolean isShip) {
             if (image != null) {
                 g2.drawImage(image, x, y, ENTITY_SIZE, ENTITY_SIZE, null);
@@ -277,6 +315,11 @@ public class startscreen extends JFrame {
 
         @Override
         public void actionPerformed(ActionEvent e) {
+            if (encounterCooldownTicks > 0) {
+                encounterCooldownTicks--;
+                repaint();
+                return;
+            }
             blockX -= blockSpeed;
             if (blockX <= SHIP_X + ENTITY_SIZE - 20) {
                 resolveEncounter();
@@ -298,25 +341,8 @@ public class startscreen extends JFrame {
                     return;
                 }
             }
+            encounterCooldownTicks = ENCOUNTER_COOLDOWN_TICKS;
             resetEncounter(false);
-        }
-
-        @Override
-        public void keyTyped(KeyEvent e) {
-        }
-
-        @Override
-        public void keyPressed(KeyEvent e) {
-            if (e.getKeyCode() == KeyEvent.VK_W || e.getKeyCode() == KeyEvent.VK_UP) {
-                shipLane = Math.max(0, shipLane - 1);
-            } else if (e.getKeyCode() == KeyEvent.VK_S || e.getKeyCode() == KeyEvent.VK_DOWN) {
-                shipLane = Math.min(LANE_COUNT - 1, shipLane + 1);
-            }
-            repaint();
-        }
-
-        @Override
-        public void keyReleased(KeyEvent e) {
         }
     }
 }
