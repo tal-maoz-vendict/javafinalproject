@@ -133,14 +133,15 @@ public class startscreen extends JFrame {
         private static final int SHIP_X = 110;
         private static final int ENTITY_SIZE = 84;
         private static final int BLOCK_START_X = PANEL_WIDTH - 170;
-        private static final double BASE_SPEED = 0.65;
-        private static final double SPEED_STEP = 0.04;
+        private static final double BASE_SPEED = 0.45;
+        private static final double SPEED_STEP = 0.03;
         private static final int ENCOUNTER_COOLDOWN_TICKS = 24;
         private static final int MAX_ACTIVE_OBJECTS = 3;
         private static final int OBJECT_SIZE = 34;
-        private static final int LASER_DURATION_TICKS = 8;
-        private static final int MIN_OBJECT_SPAWN_TICKS = 40;
-        private static final int MAX_OBJECT_SPAWN_TICKS = 110;
+        private static final int LASER_DURATION_TICKS = 40;
+        private static final int MIN_OBJECT_SPAWN_TICKS = 90;
+        private static final int MAX_OBJECT_SPAWN_TICKS = 150;
+        private static final int EVENT_TEXT_TICKS = 120;
 
         private enum FallingObjectType {
             KEY,
@@ -183,7 +184,7 @@ public class startscreen extends JFrame {
         private double blockX = BLOCK_START_X;
         private double blockSpeed = BASE_SPEED;
         private int encounterCooldownTicks = 0;
-        private int objectSpawnCooldownTicks = 50;
+        private int objectSpawnCooldownTicks = 110;
         private int laserTicksRemaining = 0;
         private int shipLane = 1;
         private int score = 0;
@@ -191,6 +192,8 @@ public class startscreen extends JFrame {
         private int invincibleCharges = 0;
         private int nextScoreMultiplier = 1;
         private String shipColor = "blue";
+        private String eventText = "";
+        private int eventTextTicks = 0;
         private boolean blockLocked = false;
         private boolean laserActive = false;
 
@@ -314,6 +317,10 @@ public class startscreen extends JFrame {
             g2.setColor(Color.WHITE);
             g2.drawString("Shield: " + invincibleCharges, 220, 48);
             g2.drawString(nextScoreMultiplier > 1 ? "x2: READY" : "x2: OFF", 330, 48);
+            if (!eventText.isEmpty()) {
+                g2.setColor(new Color(255, 245, 170));
+                g2.drawString(eventText, 450, 48);
+            }
 
             int laneHeight = (PANEL_HEIGHT - HUD_HEIGHT) / LANE_COUNT;
             g2.setColor(new Color(40, 40, 40));
@@ -463,15 +470,19 @@ public class startscreen extends JFrame {
             switch (type) {
                 case KEY:
                     blockLocked = false;
+                    showEvent("Key hit: lock disabled");
                     break;
                 case BOMB:
                     loseLifeDirect();
+                    showEvent("Bomb hit: -1 life");
                     break;
                 case STAR:
                     invincibleCharges++;
+                    showEvent("Star hit: +1 shield");
                     break;
                 case MULTIPLIER:
                     nextScoreMultiplier = 2;
+                    showEvent("x2 armed for next score");
                     break;
             }
         }
@@ -487,9 +498,15 @@ public class startscreen extends JFrame {
         private void applyFailure() {
             if (invincibleCharges > 0) {
                 invincibleCharges--;
+                showEvent("Shield used: no life lost");
                 return;
             }
             loseLifeDirect();
+        }
+
+        private void showEvent(String text) {
+            eventText = text;
+            eventTextTicks = EVENT_TEXT_TICKS;
         }
 
         private FallingObjectType nextSpawnType() {
@@ -511,10 +528,11 @@ public class startscreen extends JFrame {
 
             FallingObjectType type = nextSpawnType();
             double x = 230 + random.nextInt(PANEL_WIDTH - 310);
-            double speed = 1.2 + random.nextDouble() * 1.1 + score * 0.02;
+            double speed = 0.9 + random.nextDouble() * 0.5 + score * 0.015;
             fallingObjects.add(new FallingObject(type, x, -OBJECT_SIZE, OBJECT_SIZE, speed));
             if (type == FallingObjectType.KEY) {
                 blockLocked = true;
+                showEvent("Lock engaged: shoot key");
             }
             objectSpawnCooldownTicks = MIN_OBJECT_SPAWN_TICKS
                     + random.nextInt(MAX_OBJECT_SPAWN_TICKS - MIN_OBJECT_SPAWN_TICKS + 1);
@@ -556,6 +574,13 @@ public class startscreen extends JFrame {
                 }
             }
 
+            if (eventTextTicks > 0) {
+                eventTextTicks--;
+                if (eventTextTicks == 0) {
+                    eventText = "";
+                }
+            }
+
             repaint();
         }
 
@@ -565,8 +590,18 @@ public class startscreen extends JFrame {
 
             if (scorePoint && !blockLocked) {
                 score += nextScoreMultiplier;
+                if (nextScoreMultiplier > 1) {
+                    showEvent("x2 applied: +" + nextScoreMultiplier + " score");
+                } else {
+                    showEvent("Matched color: +1 score");
+                }
                 nextScoreMultiplier = 1;
             } else {
+                if (scorePoint && blockLocked) {
+                    showEvent("Lock penalty: life lost");
+                } else {
+                    showEvent("Wrong color: life lost");
+                }
                 applyFailure();
                 if (lives <= 0) {
                     return;
