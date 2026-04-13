@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -135,11 +136,45 @@ public class startscreen extends JFrame {
         private static final double BASE_SPEED = 0.65;
         private static final double SPEED_STEP = 0.04;
         private static final int ENCOUNTER_COOLDOWN_TICKS = 24;
+        private static final int MAX_ACTIVE_OBJECTS = 3;
+        private static final int OBJECT_SIZE = 34;
+        private static final int LASER_DURATION_TICKS = 8;
+        private static final int MIN_OBJECT_SPAWN_TICKS = 40;
+        private static final int MAX_OBJECT_SPAWN_TICKS = 110;
+
+        private enum FallingObjectType {
+            KEY,
+            BOMB,
+            STAR,
+            MULTIPLIER
+        }
+
+        private static class FallingObject {
+            private final FallingObjectType type;
+            private final double x;
+            private final int size;
+            private final double speed;
+            private double y;
+
+            private FallingObject(FallingObjectType type, double x, double y, int size, double speed) {
+                this.type = type;
+                this.x = x;
+                this.y = y;
+                this.size = size;
+                this.speed = speed;
+            }
+
+            private Rectangle bounds() {
+                return new Rectangle((int) x, (int) y, size, size);
+            }
+        }
 
         private final IntConsumer onGameOver;
         private final Random random = new Random();
         private final List<String> colors = Arrays.asList("blue", "green", "red", "yellow");
         private final List<String> laneBlockColors = new ArrayList<>();
+        private final List<FallingObject> fallingObjects = new ArrayList<>();
+        private final List<FallingObjectType> spawnBag = new ArrayList<>();
         private final Map<String, Image> shipImages = new HashMap<>();
         private final Map<String, Image> blockImages = new HashMap<>();
         private final Map<String, Color> fallbackColors = new HashMap<>();
@@ -148,10 +183,16 @@ public class startscreen extends JFrame {
         private double blockX = BLOCK_START_X;
         private double blockSpeed = BASE_SPEED;
         private int encounterCooldownTicks = 0;
+        private int objectSpawnCooldownTicks = 50;
+        private int laserTicksRemaining = 0;
         private int shipLane = 1;
         private int score = 0;
         private int lives = 3;
+        private int invincibleCharges = 0;
+        private int nextScoreMultiplier = 1;
         private String shipColor = "blue";
+        private boolean blockLocked = false;
+        private boolean laserActive = false;
 
         private GamePanel(IntConsumer onGameOver) {
             this.onGameOver = onGameOver;
@@ -213,6 +254,8 @@ public class startscreen extends JFrame {
             bindKey("moveDownS", KeyStroke.getKeyStroke('s'), this::moveDown);
             bindKey("moveUpArrow", KeyStroke.getKeyStroke("UP"), this::moveUp);
             bindKey("moveDownArrow", KeyStroke.getKeyStroke("DOWN"), this::moveDown);
+            bindKey("shootLaserD", KeyStroke.getKeyStroke('d'), this::fireLaser);
+            bindKey("shootLaserUpperD", KeyStroke.getKeyStroke('D'), this::fireLaser);
         }
 
         private void bindKey(String actionName, KeyStroke keyStroke, Runnable action) {
@@ -232,6 +275,13 @@ public class startscreen extends JFrame {
 
         private void moveDown() {
             shipLane = Math.min(LANE_COUNT - 1, shipLane + 1);
+            repaint();
+        }
+
+        private void fireLaser() {
+            laserActive = true;
+            laserTicksRemaining = LASER_DURATION_TICKS;
+            processLaserHits();
             repaint();
         }
 
@@ -258,6 +308,13 @@ public class startscreen extends JFrame {
                 drawHeart(g2, heartX + i * 42, 18, 28, i < lives);
             }
 
+            g2.setFont(new Font("Arial", Font.BOLD, 14));
+            g2.setColor(blockLocked ? new Color(255, 120, 120) : new Color(132, 237, 132));
+            g2.drawString(blockLocked ? "Lock: ON (shoot key)" : "Lock: OFF", 220, 27);
+            g2.setColor(Color.WHITE);
+            g2.drawString("Shield: " + invincibleCharges, 220, 48);
+            g2.drawString(nextScoreMultiplier > 1 ? "x2: READY" : "x2: OFF", 330, 48);
+
             int laneHeight = (PANEL_HEIGHT - HUD_HEIGHT) / LANE_COUNT;
             g2.setColor(new Color(40, 40, 40));
             for (int lane = 1; lane < LANE_COUNT; lane++) {
@@ -271,6 +328,20 @@ public class startscreen extends JFrame {
             for (int lane = 0; lane < LANE_COUNT; lane++) {
                 String blockColor = laneBlockColors.get(lane);
                 drawEntity(g2, blockImages.get(blockColor), blockColor, (int) blockX, laneTop(lane), false);
+            }
+
+            for (FallingObject object : fallingObjects) {
+                drawFallingObject(g2, object);
+            }
+
+            if (laserActive) {
+                int shipYForLaser = laneTop(shipLane);
+                int beamY = shipYForLaser + ENTITY_SIZE / 2;
+                Stroke oldStroke = g2.getStroke();
+                g2.setStroke(new BasicStroke(4f));
+                g2.setColor(new Color(130, 255, 255));
+                g2.drawLine(SHIP_X + ENTITY_SIZE, beamY, PANEL_WIDTH, beamY);
+                g2.setStroke(oldStroke);
             }
 
             g2.dispose();
@@ -313,17 +384,178 @@ public class startscreen extends JFrame {
             }
         }
 
+        private void drawFallingObject(Graphics2D g2, FallingObject object) {
+            int x = (int) object.x;
+            int y = (int) object.y;
+            int size = object.size;
+            switch (object.type) {
+                case KEY:
+                    g2.setColor(new Color(248, 212, 95));
+                    g2.fillOval(x, y, size, size);
+                    g2.setColor(new Color(95, 70, 20));
+                    g2.drawOval(x, y, size, size);
+                    g2.setFont(new Font("Arial", Font.BOLD, 16));
+                    g2.drawString("K", x + 11, y + 22);
+                    break;
+                case BOMB:
+                    g2.setColor(new Color(32, 32, 32));
+                    g2.fillOval(x, y, size, size);
+                    g2.setColor(new Color(220, 70, 70));
+                    g2.drawOval(x, y, size, size);
+                    g2.setFont(new Font("Arial", Font.BOLD, 15));
+                    g2.drawString("B", x + 11, y + 22);
+                    break;
+                case STAR:
+                    g2.setColor(new Color(255, 244, 133));
+                    g2.fillPolygon(createStarPolygon(x + size / 2, y + size / 2, size / 2));
+                    g2.setColor(new Color(135, 120, 20));
+                    g2.drawPolygon(createStarPolygon(x + size / 2, y + size / 2, size / 2));
+                    break;
+                case MULTIPLIER:
+                    g2.setColor(new Color(194, 139, 255));
+                    g2.fillRoundRect(x, y, size, size, 9, 9);
+                    g2.setColor(new Color(68, 38, 110));
+                    g2.drawRoundRect(x, y, size, size, 9, 9);
+                    g2.setFont(new Font("Arial", Font.BOLD, 13));
+                    g2.drawString("x2", x + 8, y + 21);
+                    break;
+            }
+        }
+
+        private Polygon createStarPolygon(int centerX, int centerY, int radius) {
+            Polygon star = new Polygon();
+            for (int i = 0; i < 10; i++) {
+                double angle = -Math.PI / 2 + i * Math.PI / 5;
+                int currentRadius = (i % 2 == 0) ? radius : radius / 2;
+                int pointX = centerX + (int) (Math.cos(angle) * currentRadius);
+                int pointY = centerY + (int) (Math.sin(angle) * currentRadius);
+                star.addPoint(pointX, pointY);
+            }
+            return star;
+        }
+
+        private Rectangle laserBounds() {
+            int shipY = laneTop(shipLane);
+            int beamY = shipY + ENTITY_SIZE / 2 - 2;
+            return new Rectangle(SHIP_X + ENTITY_SIZE, beamY, PANEL_WIDTH - (SHIP_X + ENTITY_SIZE), 6);
+        }
+
+        private void processLaserHits() {
+            if (!laserActive) {
+                return;
+            }
+            Rectangle beam = laserBounds();
+            Iterator<FallingObject> iterator = fallingObjects.iterator();
+            while (iterator.hasNext()) {
+                FallingObject object = iterator.next();
+                if (!beam.intersects(object.bounds())) {
+                    continue;
+                }
+                iterator.remove();
+                applyObjectHitEffect(object.type);
+                if (lives <= 0) {
+                    return;
+                }
+            }
+        }
+
+        private void applyObjectHitEffect(FallingObjectType type) {
+            switch (type) {
+                case KEY:
+                    blockLocked = false;
+                    break;
+                case BOMB:
+                    loseLifeDirect();
+                    break;
+                case STAR:
+                    invincibleCharges++;
+                    break;
+                case MULTIPLIER:
+                    nextScoreMultiplier = 2;
+                    break;
+            }
+        }
+
+        private void loseLifeDirect() {
+            lives--;
+            if (lives <= 0) {
+                timer.stop();
+                onGameOver.accept(score);
+            }
+        }
+
+        private void applyFailure() {
+            if (invincibleCharges > 0) {
+                invincibleCharges--;
+                return;
+            }
+            loseLifeDirect();
+        }
+
+        private FallingObjectType nextSpawnType() {
+            if (spawnBag.isEmpty()) {
+                spawnBag.addAll(Arrays.asList(FallingObjectType.values()));
+                Collections.shuffle(spawnBag, random);
+            }
+            return spawnBag.remove(0);
+        }
+
+        private void maybeSpawnObject() {
+            if (fallingObjects.size() >= MAX_ACTIVE_OBJECTS) {
+                return;
+            }
+            if (objectSpawnCooldownTicks > 0) {
+                objectSpawnCooldownTicks--;
+                return;
+            }
+
+            FallingObjectType type = nextSpawnType();
+            double x = 230 + random.nextInt(PANEL_WIDTH - 310);
+            double speed = 1.2 + random.nextDouble() * 1.1 + score * 0.02;
+            fallingObjects.add(new FallingObject(type, x, -OBJECT_SIZE, OBJECT_SIZE, speed));
+            if (type == FallingObjectType.KEY) {
+                blockLocked = true;
+            }
+            objectSpawnCooldownTicks = MIN_OBJECT_SPAWN_TICKS
+                    + random.nextInt(MAX_OBJECT_SPAWN_TICKS - MIN_OBJECT_SPAWN_TICKS + 1);
+        }
+
+        private void updateFallingObjects() {
+            Iterator<FallingObject> iterator = fallingObjects.iterator();
+            while (iterator.hasNext()) {
+                FallingObject object = iterator.next();
+                object.y += object.speed;
+                if (object.y > PANEL_HEIGHT) {
+                    iterator.remove();
+                }
+            }
+        }
+
         @Override
         public void actionPerformed(ActionEvent e) {
             if (encounterCooldownTicks > 0) {
                 encounterCooldownTicks--;
-                repaint();
-                return;
+            } else {
+                blockX -= blockSpeed;
+                if (blockX <= SHIP_X + ENTITY_SIZE - 20) {
+                    resolveEncounter();
+                    if (lives <= 0) {
+                        return;
+                    }
+                }
             }
-            blockX -= blockSpeed;
-            if (blockX <= SHIP_X + ENTITY_SIZE - 20) {
-                resolveEncounter();
+
+            updateFallingObjects();
+            maybeSpawnObject();
+
+            if (laserActive) {
+                processLaserHits();
+                laserTicksRemaining--;
+                if (laserTicksRemaining <= 0) {
+                    laserActive = false;
+                }
             }
+
             repaint();
         }
 
@@ -331,13 +563,12 @@ public class startscreen extends JFrame {
             String blockColorAtShipLane = laneBlockColors.get(shipLane);
             boolean scorePoint = shipColor.equals(blockColorAtShipLane);
 
-            if (scorePoint) {
-                score++;
+            if (scorePoint && !blockLocked) {
+                score += nextScoreMultiplier;
+                nextScoreMultiplier = 1;
             } else {
-                lives--;
+                applyFailure();
                 if (lives <= 0) {
-                    timer.stop();
-                    onGameOver.accept(score);
                     return;
                 }
             }
